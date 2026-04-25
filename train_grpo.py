@@ -1,23 +1,20 @@
 """
 train_grpo.py — Train an LLM to act in the FinAudit environment using TRL GRPO and Unsloth.
-
-Requirements:
-    pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-    pip install trl datasets requests
 """
 
 import os
 import json
 import random
 import requests
+import torch
 from datasets import Dataset
-from unsloth import FastLanguageModel, is_bfloat16_supported
+from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 
 # ===========================================================================
 # 1. Configuration & Server Connection
 # ===========================================================================
-API_URL = "http://localhost:7860"
+API_URL = "http://localhost:8000"
 
 SYSTEM_PROMPT = """You are a financial auditing agent operating inside the FinAuditEnv reinforcement learning environment.
 Your goal is to inspect the transactions table, calculate totals, categorize transactions by amount, flag anomalous transactions, and submit a final structured answer. 
@@ -47,7 +44,6 @@ def format_reward_func(completions, **kwargs) -> list[float]:
     rewards = []
     for completion in completions:
         try:
-            # The completion is usually a list of dicts or a raw string depending on the tokenizer
             text = completion[0]["content"] if isinstance(completion, list) else completion
             parsed = json.loads(text.strip())
             if "action_type" in parsed and "params" in parsed:
@@ -55,36 +51,28 @@ def format_reward_func(completions, **kwargs) -> list[float]:
             else:
                 rewards.append(0.0)
         except json.JSONDecodeError:
-            rewards.append(-0.5) # Penalty for hallucinating prose/markdown
+            rewards.append(-0.5) 
     return rewards
 
 def environment_reward_func(prompts, completions, **kwargs) -> list[float]:
-    """
-    Connects to the local FastAPI server to test the generated action.
-    Returns the step_reward computed by FinAuditEnv.
-    """
+    """Connects to the local FastAPI server to test the generated action."""
     rewards = []
     for completion in completions:
         try:
             text = completion[0]["content"] if isinstance(completion, list) else completion
             action_dict = json.loads(text.strip())
             
-            # Step 1: Reset the environment to get a fresh state
-            # Randomly select a task to prevent overfitting
             task = random.choice(["finaudit_easy", "finaudit_medium", "finaudit_complex"])
             requests.post(f"{API_URL}/reset?task_name={task}")
             
-            # Step 2: Execute the generated action
             response = requests.post(f"{API_URL}/step", json=action_dict)
             
             if response.status_code == 200:
                 step_data = response.json()
                 rewards.append(float(step_data.get("reward", 0.0)))
             else:
-                rewards.append(-1.0) # Server error penalty
-                
+                rewards.append(-1.0) 
         except Exception:
-            # If JSON is invalid or server is down, penalty
             rewards.append(-1.0)
             
     return rewards
@@ -94,15 +82,12 @@ def environment_reward_func(prompts, completions, **kwargs) -> list[float]:
 # ===========================================================================
 
 def prepare_dataset(num_samples=50):
-    """Generates initial observation prompts to kick off the RL episodes."""
     prompts = []
     for _ in range(num_samples):
-        # Fetch an initial state from the server
         task = random.choice(["finaudit_easy", "finaudit_medium", "finaudit_complex"])
         res = requests.post(f"{API_URL}/reset?task_name={task}")
         obs = res.json().get("observation", {})
         
-        # Format for TRL Chat Template
         prompts.append([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Current Observation: {json.dumps(obs)}"}
@@ -112,11 +97,14 @@ def prepare_dataset(num_samples=50):
 def main():
     print("Loading Unsloth Model...")
     max_seq_length = 2048
+    
+    # 🚨 FIX: Force Float16 globally to prevent ANY matrix mismatches
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Llama-3.2-3B-Instruct",
         max_seq_length=max_seq_length,
+        dtype=torch.float16, # <--- FORCED TO FLOAT16
         load_in_4bit=True,
-        fast_inference=True,
+        fast_inference=False,
         max_lora_rank=16,
         gpu_memory_utilization=0.6,
     )
@@ -146,10 +134,10 @@ def main():
         max_steps=200, 
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
-        num_generations=4, # Number of actions sampled per prompt
+        num_generations=4, 
         max_completion_length=256,
-        bf16=is_bfloat16_supported(),
-        fp16=not is_bfloat16_supported(),
+        fp16=True,  # <--- FORCED TO FLOAT16
+        bf16=False, # <--- DISABLED BFLOAT16 COMPLETELY
         optim="adamw_8bit",
         report_to="none",
     )
@@ -162,7 +150,7 @@ def main():
         train_dataset=dataset,
     )
 
-    print("Starting Training! Ensure FastAPI server is running on port 7860...")
+    print("Starting Training! Ensure FastAPI server is running on port 8000...")
     trainer.train()
 
     print("Saving trained model...")
