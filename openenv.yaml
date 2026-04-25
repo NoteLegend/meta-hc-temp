@@ -1,6 +1,6 @@
-name: finaudit-env
+name: sqlite-rescue-env
 version: "1.0.0"
-description: "A multi-task OpenEnv reinforcement learning environment for financial auditing."
+description: "A financial auditing environment where an AI agent must inspect, filter, categorise, and flag anomalies in a SQLite database."
 author: "Data Engineering Hackathon Participant"
 
 build:
