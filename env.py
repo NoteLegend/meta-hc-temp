@@ -2,6 +2,7 @@ import sqlite3
 import shutil
 import os
 import json
+import random
 from typing import Tuple, Dict, Any
 
 from models import RescueAction, RescueObservation, RescueState
@@ -160,6 +161,12 @@ class FinAuditEnv:
         "submit_answer",
     ]
 
+    TASKS = [
+        "finaudit_easy",
+        "finaudit_medium",
+        "finaudit_complex",
+    ]
+
     TASK_DESCRIPTION = (
         "You are a financial auditing agent. Inspect the transactions table, "
         "filter and categorise records, flag anomalies, and submit your findings."
@@ -199,15 +206,19 @@ class FinAuditEnv:
     # Core loop
     # ------------------------------------------------------------------
 
-    def reset(self, task_name: str = "finaudit_complex") -> dict:
+    def reset(self, task_name: str = None) -> dict:
         """Reset the environment: reload DB, clear state, return observation.
 
         Args:
-            task_name: which template DB to copy into the working path.
+            task_name: which template DB to copy into the working path. If None
+                or invalid, a FinAudit task is randomly sampled.
 
         Returns:
             Structured observation dict.
         """
+        if task_name not in self.TASKS:
+            task_name = random.choice(self.TASKS)
+
         self.task_name = task_name
         self.steps_taken = 0
         self.flagged = []

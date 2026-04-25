@@ -1,13 +1,12 @@
-name: sqlite-rescue-env
+name: finaudit-env
 version: "1.0.0"
-description: "A data engineering environment where an AI agent must clean, normalize, and manipulate a messy SQLite database using raw SQL queries."
+description: "A multi-task OpenEnv reinforcement learning environment for financial auditing."
 author: "Data Engineering Hackathon Participant"
 
 build:
   dockerfile: Dockerfile
 
 tasks:
-  - easy_data_cleaning
-  - medium_schema_normalization
-  - hard_complex_reconciliation
+  - finaudit_easy
+  - finaudit_medium
   - finaudit_complex
