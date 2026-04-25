@@ -1,0 +1,9 @@
+{
+  "episodes": 5,
+  "total_steps": 55,
+  "avg_steps_per_episode": 11.0,
+  "total_reward": 3.483,
+  "avg_reward": 0.6966,
+  "min_reward": 0.6966,
+  "max_reward": 0.6966
+}

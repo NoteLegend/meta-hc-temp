@@ -10,3 +10,4 @@ tasks:
   - easy_data_cleaning
   - medium_schema_normalization
   - hard_complex_reconciliation
+  - finaudit_complex

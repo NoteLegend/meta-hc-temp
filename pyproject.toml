@@ -18,7 +18,7 @@ dependencies = [
 
 [tool.setuptools]
 packages = []
-py-modules = ["env", "models", "graders", "inference"]
+py-modules = ["env", "models", "graders", "inference", "rewards", "generate_finaudit_db", "logger", "baseline_runner", "test_finaudit"]
 
 [project.scripts]
 server = "server.app:main"

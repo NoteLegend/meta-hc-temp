@@ -6,23 +6,30 @@ def grade_easy_task(db_path: str) -> float:
     try:
         with sqlite3.connect(db_path) as conn:
             c = conn.cursor()
-            c.execute("SELECT name, signup_date FROM customers ORDER BY id")
-            rows = c.fetchall()
             
-            if rows:
-                correct_rows = 0
-                expected = [
-                    ('Alice', '2022-12-31'),
-                    ('Bob', '2023-01-15'),
-                    ('Charlie', '2023-05-14'),
-                    ('David', '2023-11-01')
-                ]
+            # Get total number of rows to calculate percentages
+            c.execute("SELECT COUNT(*) FROM customers")
+            total_rows = c.fetchone()[0]
+            
+            if total_rows > 0:
+                # Count how many names are perfectly trimmed
+                c.execute("SELECT COUNT(*) FROM customers WHERE name = TRIM(name)")
+                trimmed_names = c.fetchone()[0]
                 
-                for actual, exp in zip(rows, expected):
-                    if actual[0] == exp[0] and actual[1] == exp[1]:
-                        correct_rows += 1
-                        
-                actual_score = float(correct_rows) / len(expected)
+                # Count how many dates follow the strict YYYY-MM-DD format 
+                # (length 10, hyphen at pos 5 and 8)
+                c.execute("""
+                    SELECT COUNT(*) FROM customers 
+                    WHERE length(signup_date) = 10 
+                    AND substr(signup_date, 5, 1) = '-' 
+                    AND substr(signup_date, 8, 1) = '-'
+                """)
+                formatted_dates = c.fetchone()[0]
+                
+                # Calculate partial credit: 50% for names, 50% for dates
+                name_score = trimmed_names / total_rows
+                date_score = formatted_dates / total_rows
+                actual_score = (name_score + date_score) / 2.0
     except sqlite3.Error:
         actual_score = 0.0
 
@@ -39,21 +46,32 @@ def grade_medium_task(db_path: str) -> float:
         with sqlite3.connect(db_path) as conn:
             c = conn.cursor()
             
-            # Check if target tables exist (0.4 points)
+            # 1. Check if target tables exist (0.4 points)
             c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('customers', 'orders')")
             tables = [row[0] for row in c.fetchall()]
             if 'customers' in tables and 'orders' in tables:
                 score += 0.4
                 
-                # Check if customers are deduplicated correctly (0.3 points)
-                c.execute("SELECT COUNT(*) FROM customers")
-                if c.fetchone()[0] == 2: # Alice and Bob
+                # 2. Check for deduplication: No duplicate names in customers (0.3 points)
+                c.execute("SELECT COUNT(*) FROM (SELECT name FROM customers GROUP BY name HAVING COUNT(*) > 1)")
+                duplicate_groups = c.fetchone()[0]
+                if duplicate_groups == 0:
                     score += 0.3
                     
-                # Check if orders map correctly to customers (0.3 points)
-                c.execute("SELECT COUNT(*) FROM orders")
-                if c.fetchone()[0] == 3:
-                    score += 0.3
+                # 3. Check Referential Integrity: No orphaned orders (0.3 points)
+                # Assumes 'orders' has a 'customer_id' column mapping to customers(id)
+                # If your orders table uses 'customer_name', change 'customer_id' to 'customer_name' and 'id' to 'name'
+                try:
+                    c.execute("""
+                        SELECT COUNT(*) FROM orders 
+                        WHERE customer_id NOT IN (SELECT id FROM customers)
+                    """)
+                    orphaned_orders = c.fetchone()[0]
+                    if orphaned_orders == 0:
+                        score += 0.3
+                except sqlite3.Error:
+                    # Column might not exist or agent failed to create it properly
+                    pass
     except sqlite3.Error:
         pass
         
@@ -69,13 +87,32 @@ def grade_hard_task(db_path: str) -> float:
     try:
         with sqlite3.connect(db_path) as conn:
             c = conn.cursor()
-            # Check if the view exists and has the correct logic
-            c.execute("SELECT account_id, net_balance FROM account_balances ORDER BY account_id")
-            rows = c.fetchall()
             
-            expected = [(101, 250.0), (102, 1000.0)]
-            if rows == expected:
+            # THE GOLDEN QUERY: We dynamically calculate the true answer
+            # Assumes the raw data is in a table called 'transactions'
+            golden_query = """
+                SELECT 
+                    account_id, 
+                    SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END) as true_balance
+                FROM transactions
+                GROUP BY account_id
+                ORDER BY account_id
+            """
+            c.execute(golden_query)
+            golden_rows = c.fetchall()
+            
+            # Fetch the agent's view
+            c.execute("SELECT account_id, net_balance FROM account_balances ORDER BY account_id")
+            agent_rows = c.fetchall()
+            
+            # Compare the dynamic result to the agent's view
+            if len(golden_rows) > 0 and agent_rows == golden_rows:
                 actual_score = 1.0
+            elif len(agent_rows) > 0:
+                # Partial credit calculation: how many rows matched exactly?
+                matches = len(set(agent_rows) & set(golden_rows))
+                actual_score = matches / len(golden_rows)
+
     except sqlite3.Error:
         actual_score = 0.0
 
