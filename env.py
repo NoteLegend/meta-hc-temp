@@ -153,6 +153,7 @@ class FinAuditEnv:
 
     # Supported action types mapped to their handler methods
     VALID_ACTIONS = [
+        "get_audit_policy",
         "inspect_data",
         "filter_transactions",
         "calculate_total",
@@ -226,6 +227,15 @@ class FinAuditEnv:
         self.last_action_result = None
         self.done = False
 
+        # --- NEW: Dynamic Target Randomization ---
+        # The agent must now read the instructions rather than assuming 'credit'
+        self.target_tx_type = random.choice(["credit", "debit"])
+        self.dynamic_task_description = (
+            f"You are a forensic financial auditing agent. Your specific goal for this episode "
+            f"is to audit ONLY the '{self.target_tx_type}' transactions. Inspect the table, "
+            f"filter for '{self.target_tx_type}', flag anomalies based the policy, and submit your findings."
+        )
+
         # Reset reward tracking
         self.cumulative_step_reward = 0.0
         self.reward_breakdown = {}
@@ -286,6 +296,7 @@ class FinAuditEnv:
                 self.db_path, self.categories, self.flagged,
                 self.submitted_total, self.completed_action_types,
                 self.cumulative_step_reward,
+                self.target_tx_type
             )
             final_reward = self.reward_breakdown["final_reward"]
             return self._build_observation(), final_reward, self.done
@@ -321,6 +332,7 @@ class FinAuditEnv:
 
         # --- Dispatch to handler ---
         handler_map = {
+            "get_audit_policy":    self._handle_get_audit_policy,
             "inspect_data":        self._handle_inspect_data,
             "filter_transactions": self._handle_filter_transactions,
             "calculate_total":     self._handle_calculate_total,
@@ -415,6 +427,7 @@ class FinAuditEnv:
                 self.db_path, self.categories, self.flagged,
                 self.submitted_total, self.completed_action_types,
                 self.cumulative_step_reward,
+                self.target_tx_type
             )
             final_reward = self.reward_breakdown["final_reward"]
             return self._build_observation(), final_reward, self.done
@@ -435,7 +448,7 @@ class FinAuditEnv:
             conn.close()
 
         obs = {
-            "task_description": self.TASK_DESCRIPTION,
+            "task_description": self.dynamic_task_description,
             "last_action_result": self.last_action_result,
             "transactions": transactions,
             "done": self.done,
@@ -452,6 +465,19 @@ class FinAuditEnv:
     # ------------------------------------------------------------------
     # Action handlers — each is a separate, modular function
     # ------------------------------------------------------------------
+
+    def _handle_get_audit_policy(self, params: dict) -> dict:
+        """Return the corporate audit policy as unstructured text."""
+        policy_text = """
+        CORPORATE AUDIT POLICY - EFFECTIVE APRIL 2026:
+        
+        1. STANDARD ANOMALIES: Any individual transaction exceeding $5,000.00 must be flagged.
+        
+        2. RULE 104 (TEMPORAL SMURFING): To comply with federal anti-money laundering laws, auditors must monitor for structured transactions. If a single user account initiates multiple transfers within a 24-hour period that cumulatively sum to greater than $5,000.00, the user must be flagged for a 'smurfing_pattern' anomaly.
+        
+        Auditors are required to cross-reference user IDs and timestamps to enforce Rule 104.
+        """
+        return {"status": "success", "policy_document": policy_text}
 
     def _handle_inspect_data(self, params: dict) -> dict:
         """Return column names and the first 5 rows of the transactions table.

@@ -90,8 +90,8 @@ def check_anomalies(db_path: str, agent_flagged: List[int]) -> float:
     return 2 * (precision * recall) / (precision + recall)
 
 
-def check_reconciliation(db_path: str, agent_total: Optional[float]) -> float:
-    """Check if agent's total matches DB total.
+def check_reconciliation(db_path: str, agent_total: Optional[float], target_tx_type: str) -> float:
+    """Check if agent's total matches DB total for the specific transaction type.
 
     Returns 1.0 if exact match (within $0.01), else 0.0.
     """
@@ -101,14 +101,16 @@ def check_reconciliation(db_path: str, agent_total: Optional[float]) -> float:
     try:
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        c.execute("SELECT SUM(amount) FROM transactions")
+        # CHANGED: Added WHERE clause to filter by target_tx_type
+        c.execute("SELECT SUM(amount) FROM transactions WHERE tx_type = ?", (target_tx_type,))
         true_total = c.fetchone()[0]
         conn.close()
     except sqlite3.Error:
         return 0.0
 
     if true_total is None:
-        return 0.0
+        # Handle cases where there are 0 transactions of that type
+        true_total = 0.0 
 
     return 1.0 if abs(float(agent_total) - float(true_total)) < 0.01 else 0.0
 
@@ -161,13 +163,14 @@ def categorization_step_reward(db_path: str, tx_id: int, category: str) -> float
 
 def flag_step_reward(db_path: str, tx_id: int) -> float:
     """Small reward if the agent correctly flags an anomalous transaction.
-
-    Returns +0.01 if truly anomalous, -0.005 if not.
+    MASSIVE reward (+1.5) if it catches the Smurfing pattern.
+    Returns +0.01 if standard anomaly, -0.005 if false positive.
     """
     try:
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        c.execute("SELECT is_anomaly FROM ground_truth_anomalies WHERE tx_id = ?", (int(tx_id),))
+        # CHANGED: Select anomaly_type alongside is_anomaly
+        c.execute("SELECT is_anomaly, anomaly_type FROM ground_truth_anomalies WHERE tx_id = ?", (int(tx_id),))
         row = c.fetchone()
         conn.close()
     except sqlite3.Error:
@@ -176,7 +179,17 @@ def flag_step_reward(db_path: str, tx_id: int) -> float:
     if row is None:
         return -0.005  # unknown tx_id → wrong flag
 
-    return 0.01 if row[0] == 1 else -0.005
+    is_anomaly = row[0]
+    anomaly_type = row[1]
+
+    if is_anomaly == 1:
+        # THE SMURF CATCHER
+        if anomaly_type == "smurfing_pattern":
+            return 1.5  
+        else:
+            return 0.01 # Standard >$5000 anomaly
+    else:
+        return -0.005   # Wrong flag penalty
 
 
 # ===========================================================================
@@ -244,10 +257,11 @@ def no_state_change_penalty() -> float:
 # Required actions before submit_answer is allowed
 REQUIRED_BEFORE_SUBMIT = {"inspect_data", "calculate_total"}
 
-def check_action_dependencies(completed_actions: Set[str]) -> dict:
+def check_action_dependencies(completed_actions: set) -> dict:
     """Verify agent has performed required actions before submitting.
 
     Requirements:
+      - get_audit_policy must have been called
       - inspect_data must have been called
       - calculate_total must have been called
       - at least one of: assign_category OR flag_anomaly
@@ -257,6 +271,11 @@ def check_action_dependencies(completed_actions: Set[str]) -> dict:
     """
     missing = []
 
+    # NEW: Mandatory Policy Check
+    if "get_audit_policy" not in completed_actions:
+        missing.append("get_audit_policy")
+
+    # Your existing loop for inspect_data and calculate_total
     for req in REQUIRED_BEFORE_SUBMIT:
         if req not in completed_actions:
             missing.append(req)
@@ -299,27 +318,19 @@ def compute_final_reward(
     submitted_total: Optional[float],
     completed_actions: Set[str],
     cumulative_step_reward: float,
+    target_tx_type: str, # <-- 1. ADDED TARGET TYPE HERE
 ) -> dict:
     """Compute the final reward at submit_answer.
 
     Final reward = weighted correctness score + penalty deductions.
     Clamped to [0.0, 1.0].
-
-    Args:
-        db_path: path to working database.
-        categories: agent's category assignments.
-        flagged: agent's flagged anomaly tx_ids.
-        submitted_total: agent's reconciliation total.
-        completed_actions: set of action_types completed during episode.
-        cumulative_step_reward: accumulated step-level rewards/penalties.
-
-    Returns:
-        dict with breakdown, raw_total, penalty_total, and final_reward.
     """
     # --- Verifier scores (each 0.0–1.0) ---
     cat_score = check_categorization(db_path, categories)
     anom_score = check_anomalies(db_path, flagged)
-    recon_score = check_reconciliation(db_path, submitted_total)
+    
+    # <-- 2. PASSED TARGET TYPE TO THE MATH VERIFIER
+    recon_score = check_reconciliation(db_path, submitted_total, target_tx_type) 
 
     # --- Weighted correctness score ---
     correctness = (
