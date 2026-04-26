@@ -42,9 +42,14 @@ SOLUTIONS = {
     ]
 }
 
+# 🚨 UPDATED: Synced exactly with the new train_grpo.py
 SYSTEM_PROMPT = """You are a financial auditing agent operating inside the FinAuditEnv reinforcement learning environment.
 Your goal is to inspect the transactions table, calculate totals, categorize transactions by amount, flag anomalous transactions, and submit a final structured answer. 
 You must act only by emitting exactly ONE valid JSON action object at a time. Do not include prose, Markdown, or explanations.
+
+CRITICAL STRATEGY RULES:
+1. Do not repeat actions you have already taken.
+2. You MUST use 'calculate_total' before using 'submit_answer'.
 
 Categorization rules:
 - amount <= 100: category is "small"
@@ -161,13 +166,13 @@ def run_finaudit_demo():
 
 
 # ---------------------------------------------------------------------------
-# NEW: Trained Agent Inference
+# 🚨 UPDATED: Trained Agent Inference with Batch Evaluation
 # ---------------------------------------------------------------------------
-def run_trained_agent():
-    print("🧠 Loading trained agent...")
+def run_trained_agent(num_episodes=50):
+    print(f"🧠 Loading trained agent for {num_episodes} evaluation episodes...")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="finaudit-agent-lora", 
-        max_seq_length=4096, # 1. Increase this to 4096 to prevent truncation
+        max_seq_length=8192, # <--- 🚨 INCREASED TO 8192
         dtype=torch.float16,
         load_in_4bit=True,
         fast_inference=False, 
@@ -175,62 +180,75 @@ def run_trained_agent():
     FastLanguageModel.for_inference(model)
 
     env = FinAuditEnv()
-    task = random.choice(["finaudit_easy", "finaudit_medium"])
-    print(f"🌍 Resetting environment ({task})...")
-    obs = env.reset(task)
+    stats = {"success": 0, "total_reward": 0, "hallucinations": 0}
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    print(f"\n=== 🚀 Starting Batch Evaluation: {num_episodes} Episodes ===")
     
-    for step in range(15):
-        print(f"\n--- Step {step + 1} ---")
-        messages.append({"role": "user", "content": f"Current Observation: {json.dumps(obs)}"})
+    for i in range(num_episodes):
+        print(f"\n--- 🏁 EPISODE {i+1} ---")
+        task = random.choice(["finaudit_easy", "finaudit_medium", "finaudit_complex"])
+        obs = env.reset(task)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        episode_reward = 0
         
-        inputs = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-        ).to("cuda")
-        
-        print("🤖 Thinking...")
-        # 2. Add temperature and top_p for more stable generation
-        outputs = model.generate(
-            input_ids=inputs, 
-            max_new_tokens=256, 
-            use_cache=True, 
-            temperature=0.1, # Keep it very focused
-            pad_token_id=tokenizer.eos_token_id
-        )
-        
-        response_text = tokenizer.batch_decode(outputs[:, inputs.shape[1]:], skip_special_tokens=True)[0]
-        
-        # 3. Aggressive cleaning to fix missing brackets or trailing junk
-        clean_response = response_text.strip()
-        if clean_response.count('{') > clean_response.count('}'):
-            clean_response += '}' # Simple fix for the missing bracket you just saw
+        for step in range(15):
+            messages.append({"role": "user", "content": f"Current Observation: {json.dumps(obs)}"})
             
-        print(f"Agent Action:\n{clean_response}")
-        messages.append({"role": "assistant", "content": clean_response})
-        
-        try:
-            action_dict = json.loads(clean_response)
-            obs, reward, done = env.step(action_dict)
-            print(f"💰 Reward received: {reward:.4f}")
+            inputs = tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_tensors="pt",
+            ).to("cuda")
             
-            if done:
-                print("\n✅ Episode Complete!")
+            outputs = model.generate(
+                input_ids=inputs, 
+                max_new_tokens=256, 
+                use_cache=True, 
+                temperature=0.1,
+                pad_token_id=tokenizer.eos_token_id
+            )
+            
+            response_text = tokenizer.batch_decode(outputs[:, inputs.shape[1]:], skip_special_tokens=True)[0]
+            
+            clean_response = response_text.strip()
+            if clean_response.count('{') > clean_response.count('}'):
+                clean_response += '}'
+                
+            print(f"Step {step+1} Action: {clean_response}")
+            messages.append({"role": "assistant", "content": clean_response})
+            
+            try:
+                action_dict = json.loads(clean_response)
+                obs, reward, done = env.step(action_dict)
+                episode_reward += reward
+                
+                if done:
+                    print(f"✅ Finished Episode {i+1} ({task}) with Reward: {episode_reward:.4f}")
+                    stats["success"] += 1
+                    break
+            except json.JSONDecodeError:
+                print(f"❌ Hallucination on Step {step+1}. Raw: {repr(clean_response)}")
+                stats["hallucinations"] += 1
                 break
-        except json.JSONDecodeError:
-            print(f"❌ JSON Error. Raw output was: {repr(clean_response)}")
-            break
+        
+        stats["total_reward"] += episode_reward
+
+    # Print Final Report Card
+    print("\n" + "="*40)
+    print("📈 ALPHA-AUDITOR FINAL REPORT CARD")
+    print(f"Total Episodes:     {num_episodes}")
+    print(f"Success Rate:       {(stats['success']/num_episodes)*100:.1f}%")
+    print(f"Average Reward:     {stats['total_reward']/num_episodes:.4f}")
+    print(f"Hallucination Rate: {(stats['hallucinations']/num_episodes)*100:.1f}%")
+    print("="*40)
 
 
 if __name__ == "__main__":
     if "--trained" in sys.argv:
-        # Run the LIVE trained AI model
-        run_trained_agent()
+        # Defaulting to 50 for the final Alpha test
+        run_trained_agent(num_episodes=50)
     elif "--finaudit" in sys.argv:
-        # Run the hardcoded demo
         run_finaudit_demo()
     else:
         if not API_KEY:
